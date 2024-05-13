@@ -1,6 +1,6 @@
 // Uncomment this block to pass the first stage
 use std::{
-    io::{BufReader, Error, Read, Write},
+    io::{Error, Read, Write},
     net::{TcpListener, TcpStream},
     thread,
 };
@@ -8,8 +8,8 @@ use std::{
 fn handle_connection_helper(stream: Result<TcpStream, Error>) {
     match stream {
         Ok(mut _stream) => {
-            // thread::spawn(|| handle_connection(_stream));
-            handle_connection(_stream);
+            thread::spawn(|| handle_connection(_stream));
+            // handle_connection(_stream);
         }
         Err(e) => {
             println!("error: {}", e);
