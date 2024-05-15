@@ -1,7 +1,10 @@
 // Uncomment this block to pass the first stage
 use std::{
+    collections::HashMap,
     io::{BufRead, BufReader, Error, Write},
     net::{TcpListener, TcpStream},
+    ptr::null,
+    sync::{Arc, Mutex},
     thread,
 };
 
@@ -41,16 +44,53 @@ impl Request {
     }
 }
 
-fn make_response(content: &String) -> String {
-    let content_length = content.len();
-    let response = format!("${}\r\n{}\r\n", content_length, content);
+enum ResponseType {
+    SimpleString,
+    BulkString,
+    NullBulkString,
+}
+
+impl ResponseType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            ResponseType::SimpleString => "+",
+            ResponseType::BulkString => "$",
+            ResponseType::NullBulkString => "$",
+        }
+    }
+}
+
+fn make_response(content: &String, content_type: ResponseType) -> String {
+    let mut response = String::new();
+    match content_type {
+        ResponseType::BulkString => {
+            let content_length = content.len();
+            response = format!(
+                "{}{}\r\n{}\r\n",
+                content_type.as_str(),
+                content_length,
+                content
+            );
+        }
+        ResponseType::NullBulkString => {
+            response = format!("{}{}\r\n{}\r\n", content_type.as_str(), -1, content);
+        }
+        ResponseType::SimpleString => {
+            response = format!("{}{}\r\n", content_type.as_str(), content);
+        }
+    }
+
     response
 }
 
-fn handle_connection_helper(stream: Result<TcpStream, Error>) {
+fn handle_connection_helper(
+    stream: Result<TcpStream, Error>,
+    redis_cache: &Arc<Mutex<HashMap<String, String>>>,
+) {
+    let thread_shared_redis_cache = Arc::clone(redis_cache);
     match stream {
         Ok(mut _stream) => {
-            thread::spawn(|| handle_connection(_stream));
+            thread::spawn(move || handle_connection(_stream, thread_shared_redis_cache));
             // handle_connection(_stream);
         }
         Err(e) => {
@@ -59,7 +99,10 @@ fn handle_connection_helper(stream: Result<TcpStream, Error>) {
     }
 }
 
-fn handle_connection(mut stream: TcpStream) {
+fn handle_connection(
+    mut stream: TcpStream,
+    thread_shared_redis_cache: Arc<Mutex<HashMap<String, String>>>,
+) {
     println!("accepted new connection");
 
     loop {
@@ -69,7 +112,25 @@ fn handle_connection(mut stream: TcpStream) {
             match req.parameters[0].as_str() {
                 "ECHO" => {
                     let content = &req.parameters[1];
-                    let response = make_response(content);
+                    let response = make_response(content, ResponseType::BulkString);
+                    let _ = stream.write(response.as_bytes());
+                }
+                "SET" => {
+                    let mut map = thread_shared_redis_cache.lock().unwrap();
+                    map.insert(req.parameters[1].clone(), req.parameters[2].clone());
+                    let response = make_response(&String::from("OK"), ResponseType::SimpleString);
+                    let _ = stream.write(response.as_bytes());
+                }
+                "GET" => {
+                    let map = thread_shared_redis_cache.lock().unwrap();
+                    let null_string = String::from("");
+                    let content = map.get(&req.parameters[1]).unwrap_or_else(|| &null_string);
+                    let response;
+                    if content.as_str() == null_string.as_str() {
+                        response = make_response(&null_string, ResponseType::NullBulkString);
+                    } else {
+                        response = make_response(&content, ResponseType::BulkString);
+                    }
                     let _ = stream.write(response.as_bytes());
                 }
                 _ => {
@@ -92,8 +153,11 @@ fn main() {
     // Uncomment this block to pass the first stage
 
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    let redis_cache: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    //let ARedisCache = Arc::new(RedisCache);
 
     for stream in listener.incoming() {
-        handle_connection_helper(stream);
+        handle_connection_helper(stream, &redis_cache);
+        println!("redis cache outside {:?}", redis_cache.lock().unwrap())
     }
 }
