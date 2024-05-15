@@ -3,15 +3,21 @@ use std::{
     collections::HashMap,
     io::{BufRead, BufReader, Error, Write},
     net::{TcpListener, TcpStream},
-    ptr::null,
     sync::{Arc, Mutex},
-    thread,
+    thread::{self},
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 #[derive(Debug)]
 struct Request {
     parameter_count: i32,
     parameters: Vec<String>,
+}
+#[derive(Debug)]
+struct Value {
+    data: String,
+    created_at: Option<u128>,
+    expiry: Option<u64>,
 }
 
 impl Request {
@@ -61,7 +67,7 @@ impl ResponseType {
 }
 
 fn make_response(content: &String, content_type: ResponseType) -> String {
-    let mut response = String::new();
+    let response;
     match content_type {
         ResponseType::BulkString => {
             let content_length = content.len();
@@ -79,13 +85,12 @@ fn make_response(content: &String, content_type: ResponseType) -> String {
             response = format!("{}{}\r\n", content_type.as_str(), content);
         }
     }
-
     response
 }
 
 fn handle_connection_helper(
     stream: Result<TcpStream, Error>,
-    redis_cache: &Arc<Mutex<HashMap<String, String>>>,
+    redis_cache: &Arc<Mutex<HashMap<String, Value>>>,
 ) {
     let thread_shared_redis_cache = Arc::clone(redis_cache);
     match stream {
@@ -101,7 +106,7 @@ fn handle_connection_helper(
 
 fn handle_connection(
     mut stream: TcpStream,
-    thread_shared_redis_cache: Arc<Mutex<HashMap<String, String>>>,
+    thread_shared_redis_cache: Arc<Mutex<HashMap<String, Value>>>,
 ) {
     println!("accepted new connection");
 
@@ -109,28 +114,73 @@ fn handle_connection(
         let request = Request::new(&mut stream);
         if let Some(req) = request {
             println!("Request is {:?}", req);
-            match req.parameters[0].as_str() {
-                "ECHO" => {
+            match req.parameters[0].to_lowercase().as_str() {
+                "echo" => {
                     let content = &req.parameters[1];
                     let response = make_response(content, ResponseType::BulkString);
                     let _ = stream.write(response.as_bytes());
                 }
-                "SET" => {
+                "set" => {
                     let mut map = thread_shared_redis_cache.lock().unwrap();
-                    map.insert(req.parameters[1].clone(), req.parameters[2].clone());
+                    let current_time = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
+                    let mut val = Value {
+                        data: req.parameters[2].clone(),
+                        created_at: Some(current_time),
+                        expiry: None,
+                    };
+
+                    if req.parameter_count > 3 {
+                        let command = req.parameters[3].to_lowercase();
+                        println!("command is:{}", { command.clone() });
+                        match command.as_str() {
+                            "px" => {
+                                let ms: u64 = req.parameters[4].parse().unwrap_or_else(|_| 0);
+                                val.expiry = Some(ms);
+                                println!("ms is {}", ms);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    map.insert(req.parameters[1].clone(), val);
                     let response = make_response(&String::from("OK"), ResponseType::SimpleString);
                     let _ = stream.write(response.as_bytes());
                 }
-                "GET" => {
-                    let map = thread_shared_redis_cache.lock().unwrap();
+                "get" => {
+                    let mut map = thread_shared_redis_cache.lock().unwrap();
                     let null_string = String::from("");
-                    let content = map.get(&req.parameters[1]).unwrap_or_else(|| &null_string);
+                    let mut default_val = Value {
+                        data: null_string.clone(),
+                        created_at: None,
+                        expiry: None,
+                    };
+                    let content = map
+                        .get_mut(&req.parameters[1])
+                        .unwrap_or_else(|| &mut default_val);
                     let response;
-                    if content.as_str() == null_string.as_str() {
+
+                    let current_time = SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis();
+                    let is_key_expired = current_time
+                        - content.created_at.unwrap_or_else(|| current_time)
+                        > content.expiry.unwrap_or_else(|| 0) as u128;
+
+                    if is_key_expired {
+                        map.remove(&req.parameters[1]);
                         response = make_response(&null_string, ResponseType::NullBulkString);
                     } else {
-                        response = make_response(&content, ResponseType::BulkString);
+                        if content.data.as_str() == null_string.as_str() {
+                            response = make_response(&null_string, ResponseType::NullBulkString);
+                        } else {
+                            response = make_response(&content.data, ResponseType::BulkString);
+                        }
                     }
+
                     let _ = stream.write(response.as_bytes());
                 }
                 _ => {
@@ -146,6 +196,27 @@ fn handle_connection(
     // let _ = stream.write(b"+PONG\r\n");
 }
 
+// Another thread in loop to check and remove the expired data (inefficient)
+
+// fn check_and_remove_expired_data(redis_cache: &Arc<Mutex<HashMap<String, Value>>>) {
+//     let thread_shared_redis_cache = Arc::clone(redis_cache);
+//     thread::spawn(move || loop {
+//         let mut map = thread_shared_redis_cache.lock().unwrap();
+//         map.retain(|key, val| {
+//             let current_time = SystemTime::now()
+//                 .duration_since(UNIX_EPOCH)
+//                 .unwrap()
+//                 .as_millis();
+//             let is_key_expired = current_time - (val.created_at.unwrap_or_else(|| current_time))
+//                 > val.expiry.unwrap_or_else(|| 0) as u128;
+//             println!("key:{}, expired: {}", key, is_key_expired);
+//             return !is_key_expired;
+//         });
+
+//         thread::sleep(Duration::from_millis(1));
+//     });
+// }
+
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
@@ -153,8 +224,9 @@ fn main() {
     // Uncomment this block to pass the first stage
 
     let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
-    let redis_cache: Arc<Mutex<HashMap<String, String>>> = Arc::new(Mutex::new(HashMap::new()));
+    let redis_cache: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
     //let ARedisCache = Arc::new(RedisCache);
+    // check_and_remove_expired_data(&redis_cache);
 
     for stream in listener.incoming() {
         handle_connection_helper(stream, &redis_cache);
