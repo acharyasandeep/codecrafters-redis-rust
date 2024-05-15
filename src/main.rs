@@ -79,7 +79,7 @@ fn make_response(content: &String, content_type: ResponseType) -> String {
             );
         }
         ResponseType::NullBulkString => {
-            response = format!("{}{}\r\n{}\r\n", content_type.as_str(), -1, content);
+            response = format!("{}{}\r\n", content_type.as_str(), -1);
         }
         ResponseType::SimpleString => {
             response = format!("{}{}\r\n", content_type.as_str(), content);
