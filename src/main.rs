@@ -166,9 +166,12 @@ fn handle_connection(
                         .duration_since(UNIX_EPOCH)
                         .unwrap()
                         .as_millis();
-                    let is_key_expired = current_time
-                        - content.created_at.unwrap_or_else(|| current_time)
-                        > content.expiry.unwrap_or_else(|| 0) as u128;
+                    let mut is_key_expired = false;
+                    if let Some(expiry) = content.expiry {
+                        is_key_expired = current_time
+                            - content.created_at.unwrap_or_else(|| current_time)
+                            > expiry as u128;
+                    }
 
                     if is_key_expired {
                         map.remove(&req.parameters[1]);
@@ -207,9 +210,12 @@ fn handle_connection(
 //                 .duration_since(UNIX_EPOCH)
 //                 .unwrap()
 //                 .as_millis();
-//             let is_key_expired = current_time - (val.created_at.unwrap_or_else(|| current_time))
-//                 > val.expiry.unwrap_or_else(|| 0) as u128;
-//             println!("key:{}, expired: {}", key, is_key_expired);
+//             let mut is_key_expired = false;
+//             if let Some(expiry) = val.expiry {
+//                 is_key_expired =
+//                     current_time - val.created_at.unwrap_or_else(|| current_time) > expiry as u128;
+//             }
+
 //             return !is_key_expired;
 //         });
 
