@@ -1,9 +1,51 @@
 // Uncomment this block to pass the first stage
 use std::{
-    io::{Error, Read, Write},
+    io::{BufRead, BufReader, Error, Write},
     net::{TcpListener, TcpStream},
     thread,
 };
+
+#[derive(Debug)]
+struct Request {
+    parameter_count: i32,
+    parameters: Vec<String>,
+}
+
+impl Request {
+    fn new(mut stream: &mut TcpStream) -> Option<Request> {
+        // let mut buffer = vec![0; 1024];
+        // let read_count = stream.read(&mut buffer).unwrap();
+        let mut buf_reader = BufReader::new(&mut stream);
+        let mut first_line = String::new();
+        let read_count = buf_reader.read_line(&mut first_line).unwrap_or_else(|_| 0);
+        if read_count == 0 {
+            return None;
+        }
+
+        let parameter_count: i32 = first_line.trim()[1..].parse().unwrap();
+
+        let mut parameters = vec![];
+
+        for _ in 0..parameter_count {
+            let mut param_length_line = String::new();
+            let _ = buf_reader.read_line(&mut param_length_line);
+            let _: i32 = param_length_line.trim()[1..].parse().unwrap();
+            let mut parameter = String::new();
+            let _ = buf_reader.read_line(&mut parameter);
+            parameters.push(parameter.trim().to_string());
+        }
+        Some(Request {
+            parameter_count,
+            parameters,
+        })
+    }
+}
+
+fn make_response(content: &String) -> String {
+    let content_length = content.len();
+    let response = format!("${}\r\n{}\r\n", content_length, content);
+    response
+}
 
 fn handle_connection_helper(stream: Result<TcpStream, Error>) {
     match stream {
@@ -19,14 +61,24 @@ fn handle_connection_helper(stream: Result<TcpStream, Error>) {
 
 fn handle_connection(mut stream: TcpStream) {
     println!("accepted new connection");
-    let mut buffer = vec![0; 1024];
 
     loop {
-        let read_count = stream.read(&mut buffer).unwrap();
-        if read_count == 0 {
+        let request = Request::new(&mut stream);
+        if let Some(req) = request {
+            println!("Request is {:?}", req);
+            match req.parameters[0].as_str() {
+                "ECHO" => {
+                    let content = &req.parameters[1];
+                    let response = make_response(content);
+                    let _ = stream.write(response.as_bytes());
+                }
+                _ => {
+                    let _ = stream.write(b"+PONG\r\n");
+                }
+            }
+        } else {
             break;
         }
-        let _ = stream.write(b"+PONG\r\n");
     }
     // println!("Request is {:?}", req);
 
