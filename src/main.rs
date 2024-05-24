@@ -6,10 +6,11 @@ use request::Request;
 use handlers::{handle_echo, handle_get, handle_set};
 use std::{
     collections::HashMap,
+    env,
     io::{Error, Write},
     net::{TcpListener, TcpStream},
     sync::{Arc, Mutex},
-    thread::{self},
+    thread,
 };
 
 #[derive(Debug)]
@@ -71,13 +72,34 @@ fn handle_connection(
     // let _ = stream.write(b"+PONG\r\n");
 }
 
+fn parse_args(args: Vec<String>) -> i32 {
+    println!("Args are: {:?}", args);
+    if args.len() >= 3 {
+        let option = &args[1];
+
+        if option == &String::from("--port") {
+            let port = &args[2];
+            let port_i32: i32 = port
+                .parse()
+                .unwrap_or_else(|_| panic!("Invalid port specified."));
+            return port_i32;
+        }
+    }
+    return 6379;
+}
+
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
 
-    // Uncomment this block to pass the first stage
+    let args: Vec<String> = env::args().collect();
 
-    let listener = TcpListener::bind("127.0.0.1:6379").unwrap();
+    let port = parse_args(args);
+
+    let addr = String::from("127.0.0.1:") + &port.to_string();
+    println!("Address is: {}", addr);
+
+    let listener = TcpListener::bind(addr).unwrap();
     let redis_cache: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
     //let ARedisCache = Arc::new(RedisCache);
     // check_and_remove_expired_data(&redis_cache);
