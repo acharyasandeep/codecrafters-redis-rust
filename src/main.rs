@@ -132,7 +132,24 @@ fn main() {
     let (port, replication_info) = parse_args(args);
 
     let addr = String::from("127.0.0.1:") + &port.to_string();
-    println!("Address is: {}", addr);
+
+    if replication_info.role == "slave" {
+        if replication_info.replica_info != "" {
+            let mut host_port = replication_info.replica_info.split_ascii_whitespace();
+            let host = host_port.next().unwrap_or_else(|| "can't unwrap host");
+            let port = host_port.next().unwrap_or_else(|| "can't unwrap port");
+
+            let stream = TcpStream::connect(host.to_owned() + ":" + port);
+            match stream {
+                Ok(mut _stream) => {
+                    let _ = _stream.write(b"*1\r\n$4\r\nPING\r\n");
+                }
+                Err(e) => {
+                    panic!("can't connect to master, error: {:?}", e);
+                }
+            }
+        }
+    }
 
     let listener = TcpListener::bind(addr).unwrap();
     let thread_shared_data: Arc<Mutex<SharedData>> = Arc::new(Mutex::new(SharedData {

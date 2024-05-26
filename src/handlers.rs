@@ -80,7 +80,7 @@ pub fn handle_get(req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> 
     response
 }
 
-pub fn handle_info(req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> String {
+pub fn handle_info(_req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> String {
     let shared_data = thread_shared_data.lock().unwrap();
     let role = &shared_data.replication_info.role;
     // if req.parameter_count > 1 {
