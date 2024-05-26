@@ -3,7 +3,7 @@ pub mod request;
 pub mod response;
 use request::Request;
 
-use handlers::{handle_echo, handle_get, handle_set};
+use handlers::{handle_echo, handle_get, handle_info, handle_set};
 use std::{
     collections::HashMap,
     env,
@@ -57,6 +57,10 @@ fn handle_connection(
                 }
                 "get" => {
                     let response = handle_get(req, &thread_shared_redis_cache);
+                    let _ = stream.write(response.as_bytes());
+                }
+                "info" => {
+                    let response = handle_info(req);
                     let _ = stream.write(response.as_bytes());
                 }
                 _ => {
