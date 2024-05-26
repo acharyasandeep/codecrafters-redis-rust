@@ -91,7 +91,7 @@ pub fn handle_info(
     // let mut map = thread_shared_redis_cache.lock().unwrap();
     let mut content = "";
     if req.parameter_count > 1 {
-        match req.parameters[2].to_lowercase().as_str() {
+        match req.parameters[1].to_lowercase().as_str() {
             "replication" => content = "role:master",
             _ => content = "role:master",
         }
