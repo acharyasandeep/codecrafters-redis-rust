@@ -1,8 +1,7 @@
 use crate::request::Request;
 use crate::response::{make_response, ResponseType};
-use crate::Value;
+use crate::{SharedData, Value};
 use std::{
-    collections::HashMap,
     sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -13,11 +12,8 @@ pub fn handle_echo(req: Request) -> String {
     make_response(content, ResponseType::BulkString)
 }
 
-pub fn handle_set(
-    req: Request,
-    thread_shared_redis_cache: &Arc<Mutex<HashMap<String, Value>>>,
-) -> String {
-    let mut map = thread_shared_redis_cache.lock().unwrap();
+pub fn handle_set(req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> String {
+    let mut shared_data = thread_shared_data.lock().unwrap();
     let current_time = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -41,15 +37,15 @@ pub fn handle_set(
         }
     }
 
-    map.insert(req.parameters[1].clone(), val);
+    shared_data
+        .redis_cache
+        .insert(req.parameters[1].clone(), val);
     make_response(&String::from("OK"), ResponseType::SimpleString)
 }
 
-pub fn handle_get(
-    req: Request,
-    thread_shared_redis_cache: &Arc<Mutex<HashMap<String, Value>>>,
-) -> String {
-    let mut map = thread_shared_redis_cache.lock().unwrap();
+pub fn handle_get(req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> String {
+    let mut shared_data = thread_shared_data.lock().unwrap();
+    let map = &mut shared_data.redis_cache;
     let null_string = String::from("");
     let mut default_val = Value {
         data: null_string.clone(),
@@ -84,19 +80,16 @@ pub fn handle_get(
     response
 }
 
-pub fn handle_info(
-    req: Request,
-    // thread_shared_redis_cache: &Arc<Mutex<HashMap<String, Value>>>,
-) -> String {
-    // let mut map = thread_shared_redis_cache.lock().unwrap();
-    let mut content = "";
-    if req.parameter_count > 1 {
-        match req.parameters[1].to_lowercase().as_str() {
-            "replication" => content = "role:master",
-            _ => content = "role:master",
-        }
-    }
+pub fn handle_info(req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> String {
+    let shared_data = thread_shared_data.lock().unwrap();
+    let role = &shared_data.replication_info.role;
+    // if req.parameter_count > 1 {
+    //     match req.parameters[1].to_lowercase().as_str() {
+    //         "replication" => content = "role:master",
+    //         _ => content = "role:master",
+    //     }
+    // }
+    let content = "role:".to_owned() + role;
 
-    // map.insert(req.parameters[1].clone(), val);
     make_response(&String::from(content), ResponseType::BulkString)
 }

@@ -20,14 +20,26 @@ pub struct Value {
     expiry: Option<u64>,
 }
 
+#[derive(Debug)]
+pub struct ReplicationInfo {
+    replica_info: String,
+    role: String,
+}
+
+#[derive(Debug)]
+pub struct SharedData {
+    replication_info: ReplicationInfo,
+    redis_cache: HashMap<String, Value>,
+}
+
 fn handle_connection_helper(
     stream: Result<TcpStream, Error>,
-    redis_cache: &Arc<Mutex<HashMap<String, Value>>>,
+    thread_shared_data: &Arc<Mutex<SharedData>>,
 ) {
-    let thread_shared_redis_cache = Arc::clone(redis_cache);
+    let thread_shared_data = Arc::clone(thread_shared_data);
     match stream {
         Ok(mut _stream) => {
-            thread::spawn(move || handle_connection(_stream, thread_shared_redis_cache));
+            thread::spawn(move || handle_connection(_stream, thread_shared_data));
             // handle_connection(_stream);
         }
         Err(e) => {
@@ -36,10 +48,7 @@ fn handle_connection_helper(
     }
 }
 
-fn handle_connection(
-    mut stream: TcpStream,
-    thread_shared_redis_cache: Arc<Mutex<HashMap<String, Value>>>,
-) {
+fn handle_connection(mut stream: TcpStream, thread_shared_data: Arc<Mutex<SharedData>>) {
     println!("accepted new connection");
 
     loop {
@@ -52,15 +61,15 @@ fn handle_connection(
                     let _ = stream.write(response.as_bytes());
                 }
                 "set" => {
-                    let response = handle_set(req, &thread_shared_redis_cache);
+                    let response = handle_set(req, &thread_shared_data);
                     let _ = stream.write(response.as_bytes());
                 }
                 "get" => {
-                    let response = handle_get(req, &thread_shared_redis_cache);
+                    let response = handle_get(req, &thread_shared_data);
                     let _ = stream.write(response.as_bytes());
                 }
                 "info" => {
-                    let response = handle_info(req);
+                    let response = handle_info(req, &thread_shared_data);
                     let _ = stream.write(response.as_bytes());
                 }
                 _ => {
@@ -76,20 +85,42 @@ fn handle_connection(
     // let _ = stream.write(b"+PONG\r\n");
 }
 
-fn parse_args(args: Vec<String>) -> i32 {
+fn parse_args(args: Vec<String>) -> (i32, ReplicationInfo) {
     println!("Args are: {:?}", args);
-    if args.len() >= 3 {
-        let option = &args[1];
+    let mut port = 6379;
+    let mut role = "master";
+    let mut replica_info = String::from("");
+
+    for i in 1..args.len() {
+        let option = &args[i];
 
         if option == &String::from("--port") {
-            let port = &args[2];
-            let port_i32: i32 = port
+            let port_str = &args[i + 1];
+            port = port_str
                 .parse()
                 .unwrap_or_else(|_| panic!("Invalid port specified."));
-            return port_i32;
+        } else if option == &String::from("--replicaof") {
+            role = "slave";
+            if let Some(replica_of) = args.get(i + 1) {
+                replica_info = replica_of.clone()
+            }
         }
     }
-    return 6379;
+    // if args.len() >= 3 {
+    //     let option = &args[1];
+
+    //     if option == &String::from("--port") {
+    //         let port_str = &args[2];
+    //         port = port_str
+    //             .parse()
+    //             .unwrap_or_else(|_| panic!("Invalid port specified."));
+    //     }
+    // }
+    let replication_info = ReplicationInfo {
+        role: role.to_string(),
+        replica_info,
+    };
+    return (port, replication_info);
 }
 
 fn main() {
@@ -98,18 +129,24 @@ fn main() {
 
     let args: Vec<String> = env::args().collect();
 
-    let port = parse_args(args);
+    let (port, replication_info) = parse_args(args);
 
     let addr = String::from("127.0.0.1:") + &port.to_string();
     println!("Address is: {}", addr);
 
     let listener = TcpListener::bind(addr).unwrap();
-    let redis_cache: Arc<Mutex<HashMap<String, Value>>> = Arc::new(Mutex::new(HashMap::new()));
+    let thread_shared_data: Arc<Mutex<SharedData>> = Arc::new(Mutex::new(SharedData {
+        replication_info,
+        redis_cache: HashMap::new(),
+    }));
     //let ARedisCache = Arc::new(RedisCache);
     // check_and_remove_expired_data(&redis_cache);
 
     for stream in listener.incoming() {
-        handle_connection_helper(stream, &redis_cache);
-        println!("redis cache outside {:?}", redis_cache.lock().unwrap())
+        handle_connection_helper(stream, &thread_shared_data);
+        println!(
+            "redis cache outside {:?}",
+            thread_shared_data.lock().unwrap().redis_cache
+        )
     }
 }
