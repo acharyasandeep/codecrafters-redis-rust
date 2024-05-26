@@ -89,7 +89,16 @@ pub fn handle_info(req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) ->
     //         _ => content = "role:master",
     //     }
     // }
-    let content = "role:".to_owned() + role;
+    let mut content = "role:".to_owned() + role;
+    if role == "master" {
+        let master_replid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
+        let master_repl_offset = 0;
+        content += &("\nmaster_replid:".to_owned()
+            + master_replid
+            + "\nmaster_repl_offset:"
+            + master_repl_offset.to_string().as_str()
+            + "\n")
+    }
 
     make_response(&String::from(content), ResponseType::BulkString)
 }
