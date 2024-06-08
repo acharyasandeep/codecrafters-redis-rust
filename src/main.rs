@@ -3,15 +3,50 @@ pub mod request;
 pub mod response;
 use request::Request;
 
-use handlers::{handle_echo, handle_get, handle_info, handle_set};
+use handlers::{handle_echo, handle_get, handle_info, handle_replconf, handle_set};
 use std::{
     collections::HashMap,
     env,
-    io::{Error, Write},
-    net::{TcpListener, TcpStream},
+    io::{BufReader, BufWriter, Error, Read, Write},
+    net::{SocketAddr, TcpListener, TcpStream},
     sync::{Arc, Mutex},
     thread,
+    time::Duration,
 };
+
+pub enum ResponseEnum {
+    OK,
+    PONG,
+}
+
+impl ResponseEnum {
+    pub fn as_string(&self) -> String {
+        match self {
+            ResponseEnum::OK => String::from("+OK\r\n"),
+            ResponseEnum::PONG => String::from("+PONG\r\n"),
+        }
+    }
+}
+
+pub enum RequestEnum {
+    PING,
+    REPLCONF1,
+    REPLCONF2,
+}
+
+impl RequestEnum {
+    pub fn as_string(&self) -> String {
+        match self {
+            RequestEnum::PING => String::from("*1\r\n$4\r\nPING\r\n"),
+            RequestEnum::REPLCONF1 => {
+                String::from("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$4\r\n{}\r\n")
+            }
+            RequestEnum::REPLCONF2 => {
+                String::from("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n")
+            }
+        }
+    }
+}
 
 #[derive(Debug)]
 pub struct Value {
@@ -72,8 +107,12 @@ fn handle_connection(mut stream: TcpStream, thread_shared_data: Arc<Mutex<Shared
                     let response = handle_info(req, &thread_shared_data);
                     let _ = stream.write(response.as_bytes());
                 }
+                "replconf" => {
+                    let response = handle_replconf(req);
+                    let _ = stream.write(response.as_bytes());
+                }
                 _ => {
-                    let _ = stream.write(b"+PONG\r\n");
+                    let _ = stream.write(ResponseEnum::PONG.as_string().as_bytes());
                 }
             }
         } else {
@@ -123,6 +162,40 @@ fn parse_args(args: Vec<String>) -> (i32, ReplicationInfo) {
     return (port, replication_info);
 }
 
+fn do_handshake(_stream: TcpStream, port: &str) {
+    _stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut reader = BufReader::new(&_stream);
+    let mut writer = BufWriter::new(&_stream);
+    let _ = writer.write(RequestEnum::PING.as_string().as_bytes());
+    writer.flush().unwrap();
+
+    let mut buf = String::from("");
+
+    let _ = reader.read_to_string(&mut buf);
+    println!("Got response {:?}", buf);
+    if buf == ResponseEnum::PONG.as_string() {
+        let replconf_first_str =
+            str::replace(RequestEnum::REPLCONF1.as_string().as_str(), "{}", port);
+        let _ = writer.write(replconf_first_str.as_bytes());
+        writer.flush().unwrap();
+        buf.clear();
+        let _ = reader.read_to_string(&mut buf);
+        println!("Got response {:?}", buf);
+        if buf == ResponseEnum::OK.as_string() {
+            let _ = writer.write(RequestEnum::REPLCONF2.as_string().as_bytes());
+            writer.flush().unwrap();
+            buf.clear();
+            let _ = reader.read_to_string(&mut buf);
+            println!("Got response {:?}", buf);
+            if buf != ResponseEnum::OK.as_string() {
+                println!("Can't send command to master")
+            }
+        }
+    }
+}
+
 fn main() {
     // You can use print statements as follows for debugging, they'll be visible when running tests.
     println!("Logs from your program will appear here!");
@@ -139,10 +212,13 @@ fn main() {
             let host = host_port.next().unwrap_or_else(|| "can't unwrap host");
             let port = host_port.next().unwrap_or_else(|| "can't unwrap port");
 
-            let stream = TcpStream::connect(host.to_owned() + ":" + port);
+            let sock_addr: SocketAddr = (host.to_owned() + ":" + port).parse().unwrap();
+
+            let stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(30));
+
             match stream {
                 Ok(mut _stream) => {
-                    let _ = _stream.write(b"*1\r\n$4\r\nPING\r\n");
+                    do_handshake(_stream, port);
                 }
                 Err(e) => {
                     panic!("can't connect to master, error: {:?}", e);
