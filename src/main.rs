@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     env,
     io::{BufReader, BufWriter, Error, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
+    net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -209,10 +209,10 @@ fn main() {
     if replication_info.role == "slave" {
         if replication_info.replica_info != "" {
             let mut host_port = replication_info.replica_info.split_ascii_whitespace();
-            let host = host_port.next().unwrap_or_else(|| "can't unwrap host");
-            let port = host_port.next().unwrap_or_else(|| "can't unwrap port");
+            let master_host = host_port.next().unwrap_or_else(|| "can't unwrap host");
+            let master_port = host_port.next().unwrap_or_else(|| "can't unwrap port");
 
-            let sock_addr = (host.to_owned() + ":" + port)
+            let sock_addr = (master_host.to_owned() + ":" + master_port)
                 .to_socket_addrs()
                 .unwrap()
                 .filter(|addr| match addr.ip() {
@@ -227,7 +227,7 @@ fn main() {
 
             match stream {
                 Ok(mut _stream) => {
-                    do_handshake(_stream, port);
+                    do_handshake(_stream, port.to_string().as_str());
                 }
                 Err(e) => {
                     panic!("can't connect to master, error: {:?}", e);
