@@ -8,7 +8,7 @@ use std::{
     collections::HashMap,
     env,
     io::{BufReader, BufWriter, Error, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream, ToSocketAddrs},
     sync::{Arc, Mutex},
     thread,
     time::Duration,
@@ -164,7 +164,7 @@ fn parse_args(args: Vec<String>) -> (i32, ReplicationInfo) {
 
 fn do_handshake(_stream: TcpStream, port: &str) {
     _stream
-        .set_read_timeout(Some(Duration::from_secs(5)))
+        .set_read_timeout(Some(Duration::from_secs(1)))
         .unwrap();
     let mut reader = BufReader::new(&_stream);
     let mut writer = BufWriter::new(&_stream);
@@ -212,9 +212,18 @@ fn main() {
             let host = host_port.next().unwrap_or_else(|| "can't unwrap host");
             let port = host_port.next().unwrap_or_else(|| "can't unwrap port");
 
-            let sock_addr: SocketAddr = (host.to_owned() + ":" + port).parse().unwrap();
+            let sock_addr = (host.to_owned() + ":" + port)
+                .to_socket_addrs()
+                .unwrap()
+                .filter(|addr| match addr.ip() {
+                    std::net::IpAddr::V4(_) => true,
+                    _ => false,
+                })
+                .next();
+            let sock_addr_resolved = sock_addr.unwrap();
+            println!("{}", sock_addr_resolved);
 
-            let stream = TcpStream::connect_timeout(&sock_addr, Duration::from_secs(30));
+            let stream = TcpStream::connect_timeout(&sock_addr_resolved, Duration::from_secs(30));
 
             match stream {
                 Ok(mut _stream) => {
