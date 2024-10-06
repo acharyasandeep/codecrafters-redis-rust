@@ -3,7 +3,7 @@ pub mod request;
 pub mod response;
 use request::Request;
 
-use handlers::{handle_echo, handle_get, handle_info, handle_replconf, handle_set};
+use handlers::{handle_echo, handle_get, handle_info, handle_psync, handle_replconf, handle_set};
 use std::{
     collections::HashMap,
     env,
@@ -32,6 +32,7 @@ pub enum RequestEnum {
     PING,
     REPLCONF1,
     REPLCONF2,
+    PSYNC,
 }
 
 impl RequestEnum {
@@ -44,6 +45,7 @@ impl RequestEnum {
             RequestEnum::REPLCONF2 => {
                 String::from("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n")
             }
+            RequestEnum::PSYNC => String::from("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"),
         }
     }
 }
@@ -109,6 +111,10 @@ fn handle_connection(mut stream: TcpStream, thread_shared_data: Arc<Mutex<Shared
                 }
                 "replconf" => {
                     let response = handle_replconf(req);
+                    let _ = stream.write(response.as_bytes());
+                }
+                "psync" => {
+                    let response = handle_psync(req);
                     let _ = stream.write(response.as_bytes());
                 }
                 _ => {
@@ -189,8 +195,12 @@ fn do_handshake(_stream: TcpStream, port: &str) {
             buf.clear();
             let _ = reader.read_to_string(&mut buf);
             println!("Got response {:?}", buf);
-            if buf != ResponseEnum::OK.as_string() {
-                println!("Can't send command to master")
+            if buf == ResponseEnum::OK.as_string() {
+                let _ = writer.write(RequestEnum::PSYNC.as_string().as_bytes());
+                writer.flush().unwrap();
+                buf.clear();
+                let _ = reader.read_to_string(&mut buf);
+                println!("Got response {:?}", buf);
             }
         }
     }
@@ -241,6 +251,7 @@ fn main() {
         replication_info,
         redis_cache: HashMap::new(),
     }));
+
     //let ARedisCache = Arc::new(RedisCache);
     // check_and_remove_expired_data(&redis_cache);
 

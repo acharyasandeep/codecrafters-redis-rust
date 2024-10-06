@@ -12,11 +12,6 @@ pub fn handle_echo(req: Request) -> String {
     make_response(content, ResponseType::BulkString)
 }
 
-pub fn handle_replconf(_: Request) -> String {
-    let content = String::from("OK");
-    make_response(&content, ResponseType::SimpleString)
-}
-
 pub fn handle_set(req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> String {
     let mut shared_data = thread_shared_data.lock().unwrap();
     let current_time = SystemTime::now()
@@ -106,4 +101,14 @@ pub fn handle_info(_req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -
     }
 
     make_response(&String::from(content), ResponseType::BulkString)
+}
+
+pub fn handle_replconf(_: Request) -> String {
+    let content = String::from("OK");
+    make_response(&content, ResponseType::SimpleString)
+}
+
+pub fn handle_psync(_: Request) -> String {
+    let content = String::from("FULLRESYNC <REPL_ID> 0");
+    make_response(&content, ResponseType::SimpleString)
 }
