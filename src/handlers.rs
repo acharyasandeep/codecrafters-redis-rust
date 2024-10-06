@@ -91,8 +91,8 @@ pub fn handle_info(_req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -
     // }
     let mut content = "role:".to_owned() + role;
     if role == "master" {
-        let master_replid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
-        let master_repl_offset = 0;
+        let master_replid = &shared_data.replication_info.master_replid;
+        let master_repl_offset = &shared_data.replication_info.master_repl_offset;
         content += &("\nmaster_replid:".to_owned()
             + master_replid
             + "\nmaster_repl_offset:"
@@ -108,7 +108,10 @@ pub fn handle_replconf(_: Request) -> String {
     make_response(&content, ResponseType::SimpleString)
 }
 
-pub fn handle_psync(_: Request) -> String {
-    let content = String::from("FULLRESYNC <REPL_ID> 0");
+pub fn handle_psync(_: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> String {
+    let shared_data = thread_shared_data.lock().unwrap();
+    let master_replid = &shared_data.replication_info.master_replid;
+    let master_repl_offset = &shared_data.replication_info.master_repl_offset;
+    let content = format!("FULLRESYNC {} {}", master_replid, master_repl_offset);
     make_response(&content, ResponseType::SimpleString)
 }

@@ -61,6 +61,8 @@ pub struct Value {
 pub struct ReplicationInfo {
     replica_info: String,
     role: String,
+    master_replid: String,
+    master_repl_offset: i32,
 }
 
 #[derive(Debug)]
@@ -114,7 +116,7 @@ fn handle_connection(mut stream: TcpStream, thread_shared_data: Arc<Mutex<Shared
                     let _ = stream.write(response.as_bytes());
                 }
                 "psync" => {
-                    let response = handle_psync(req);
+                    let response = handle_psync(req, &thread_shared_data);
                     let _ = stream.write(response.as_bytes());
                 }
                 _ => {
@@ -134,6 +136,8 @@ fn parse_args(args: Vec<String>) -> (i32, ReplicationInfo) {
     println!("Args are: {:?}", args);
     let mut port = 6379;
     let mut role = "master";
+    let master_replid = "8371b4fb1155b71f4a04d3e1bc3e18c4a990aeeb";
+    let master_repl_offset = 0;
     let mut replica_info = String::from("");
 
     for i in 1..args.len() {
@@ -164,6 +168,8 @@ fn parse_args(args: Vec<String>) -> (i32, ReplicationInfo) {
     let replication_info = ReplicationInfo {
         role: role.to_string(),
         replica_info,
+        master_replid: master_replid.to_string(),
+        master_repl_offset: master_repl_offset,
     };
     return (port, replication_info);
 }
