@@ -1,6 +1,7 @@
 pub mod handlers;
 pub mod request;
 pub mod response;
+pub mod utils;
 use request::Request;
 
 use handlers::{handle_echo, handle_get, handle_info, handle_psync, handle_replconf, handle_set};
@@ -10,7 +11,7 @@ use std::{
     io::{BufReader, BufWriter, Error, Read, Write},
     net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::{Arc, Mutex},
-    thread,
+    thread::{self, sleep},
     time::Duration,
 };
 
@@ -118,6 +119,17 @@ fn handle_connection(mut stream: TcpStream, thread_shared_data: Arc<Mutex<Shared
                 "psync" => {
                     let response = handle_psync(req, &thread_shared_data);
                     let _ = stream.write(response.as_bytes());
+
+                    //Second data won't be read so, a simple hack here. *
+                    sleep(Duration::from_secs(1));
+                    //
+                    let empty_rdb = get_empty_rdb();
+                    let content = [
+                        format!("${}\r\n", empty_rdb.len()).as_bytes(),
+                        empty_rdb.as_slice(),
+                    ]
+                    .concat();
+                    let _ = stream.write(&content);
                 }
                 _ => {
                     let _ = stream.write(ResponseEnum::PONG.as_string().as_bytes());
@@ -207,9 +219,23 @@ fn do_handshake(_stream: TcpStream, port: &str) {
                 buf.clear();
                 let _ = reader.read_to_string(&mut buf);
                 println!("Got response {:?}", buf);
+                buf.clear();
+                writer.flush().unwrap();
+                let mut buf = vec![];
+                let _ = reader.read_to_end(&mut buf);
+
+                println!("Got response {:?}", buf);
             }
         }
     }
+}
+
+fn get_empty_rdb() -> Vec<u8> {
+    let hex_empty_rdb = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2";
+    let empty_file_payload = hex::decode(hex_empty_rdb).map_err(|decoding_err| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, decoding_err.to_string())
+    });
+    empty_file_payload.unwrap()
 }
 
 fn main() {
