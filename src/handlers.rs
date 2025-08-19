@@ -40,6 +40,7 @@ pub fn handle_set(req: Request, thread_shared_data: &Arc<Mutex<SharedData>>) -> 
     shared_data
         .redis_cache
         .insert(req.parameters[1].clone(), val);
+
     make_response(&String::from("OK"), ResponseType::SimpleString)
 }
 

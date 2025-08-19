@@ -3,7 +3,7 @@ use std::{
     net::TcpStream,
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Request {
     pub parameter_count: i32,
     pub parameters: Vec<String>,
@@ -20,7 +20,7 @@ impl Request {
             return None;
         }
 
-        let parameter_count: i32 = first_line.trim()[1..].parse().unwrap();
+        let parameter_count: i32 = first_line.trim()[1..].parse().unwrap_or_else(|_| 0);
 
         let mut parameters = vec![];
 

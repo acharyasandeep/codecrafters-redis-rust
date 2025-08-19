@@ -8,12 +8,12 @@ use handlers::{handle_echo, handle_get, handle_info, handle_psync, handle_replco
 use std::{
     collections::HashMap,
     env,
-    io::{BufReader, BufWriter, Error, Read, Write},
+    io::{BufRead, BufReader, BufWriter, Error, Read, Write},
     net::{TcpListener, TcpStream, ToSocketAddrs},
     sync::{Arc, Mutex},
-    thread::{self, sleep},
-    time::Duration,
+    thread::{self},
 };
+use utils::{get_empty_rdb, sync_to_replica};
 
 pub enum ResponseEnum {
     OK,
@@ -58,7 +58,7 @@ pub struct Value {
     expiry: Option<u64>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ReplicationInfo {
     replica_info: String,
     role: String,
@@ -68,6 +68,7 @@ pub struct ReplicationInfo {
 
 #[derive(Debug)]
 pub struct SharedData {
+    replica_connections: Vec<TcpStream>,
     replication_info: ReplicationInfo,
     redis_cache: HashMap<String, Value>,
 }
@@ -89,20 +90,27 @@ fn handle_connection_helper(
 }
 
 fn handle_connection(mut stream: TcpStream, thread_shared_data: Arc<Mutex<SharedData>>) {
-    println!("accepted new connection");
-
     loop {
         let request = Request::new(&mut stream);
+        println!("Request received: {:?}", request);
         if let Some(req) = request {
-            println!("Request is {:?}", req);
+            if req.parameter_count == 0 {
+                continue;
+            }
             match req.parameters[0].to_lowercase().as_str() {
                 "echo" => {
                     let response = handle_echo(req);
                     let _ = stream.write(response.as_bytes());
                 }
                 "set" => {
-                    let response = handle_set(req, &thread_shared_data);
-                    let _ = stream.write(response.as_bytes());
+                    let response = handle_set(req.clone(), &thread_shared_data);
+                    let shared_data = thread_shared_data.lock().unwrap();
+                    if shared_data.replication_info.role == "master" {
+                        let _ = stream.write(response.as_bytes());
+                        if let Err(e) = sync_to_replica(shared_data, req.clone()) {
+                            eprintln!("Error syncing to replica: {}", e);
+                        };
+                    }
                 }
                 "get" => {
                     let response = handle_get(req, &thread_shared_data);
@@ -120,9 +128,6 @@ fn handle_connection(mut stream: TcpStream, thread_shared_data: Arc<Mutex<Shared
                     let response = handle_psync(req, &thread_shared_data);
                     let _ = stream.write(response.as_bytes());
 
-                    //Second data won't be read so, a simple hack here. *
-                    sleep(Duration::from_secs(1));
-                    //
                     let empty_rdb = get_empty_rdb();
                     let content = [
                         format!("${}\r\n", empty_rdb.len()).as_bytes(),
@@ -130,6 +135,16 @@ fn handle_connection(mut stream: TcpStream, thread_shared_data: Arc<Mutex<Shared
                     ]
                     .concat();
                     let _ = stream.write(&content);
+
+                    thread_shared_data
+                        .lock()
+                        .unwrap()
+                        .replica_connections
+                        .push(stream.try_clone().unwrap());
+                    println!(
+                        "Replica connections: {:?}",
+                        thread_shared_data.lock().unwrap().replica_connections
+                    );
                 }
                 _ => {
                     let _ = stream.write(ResponseEnum::PONG.as_string().as_bytes());
@@ -167,16 +182,6 @@ fn parse_args(args: Vec<String>) -> (i32, ReplicationInfo) {
             }
         }
     }
-    // if args.len() >= 3 {
-    //     let option = &args[1];
-
-    //     if option == &String::from("--port") {
-    //         let port_str = &args[2];
-    //         port = port_str
-    //             .parse()
-    //             .unwrap_or_else(|_| panic!("Invalid port specified."));
-    //     }
-    // }
     let replication_info = ReplicationInfo {
         role: role.to_string(),
         replica_info,
@@ -186,18 +191,15 @@ fn parse_args(args: Vec<String>) -> (i32, ReplicationInfo) {
     return (port, replication_info);
 }
 
-fn do_handshake(_stream: TcpStream, port: &str) {
-    _stream
-        .set_read_timeout(Some(Duration::from_secs(1)))
-        .unwrap();
-    let mut reader = BufReader::new(&_stream);
-    let mut writer = BufWriter::new(&_stream);
+fn do_handshake(_stream: &TcpStream, port: &str) {
+    let mut reader = BufReader::new(_stream);
+    let mut writer = BufWriter::new(_stream);
     let _ = writer.write(RequestEnum::PING.as_string().as_bytes());
     writer.flush().unwrap();
 
     let mut buf = String::from("");
 
-    let _ = reader.read_to_string(&mut buf);
+    let _ = reader.read_line(&mut buf);
     println!("Got response {:?}", buf);
     if buf == ResponseEnum::PONG.as_string() {
         let replconf_first_str =
@@ -205,37 +207,32 @@ fn do_handshake(_stream: TcpStream, port: &str) {
         let _ = writer.write(replconf_first_str.as_bytes());
         writer.flush().unwrap();
         buf.clear();
-        let _ = reader.read_to_string(&mut buf);
+        let _ = reader.read_line(&mut buf);
         println!("Got response {:?}", buf);
         if buf == ResponseEnum::OK.as_string() {
             let _ = writer.write(RequestEnum::REPLCONF2.as_string().as_bytes());
             writer.flush().unwrap();
             buf.clear();
-            let _ = reader.read_to_string(&mut buf);
+            let _ = reader.read_line(&mut buf);
             println!("Got response {:?}", buf);
             if buf == ResponseEnum::OK.as_string() {
                 let _ = writer.write(RequestEnum::PSYNC.as_string().as_bytes());
                 writer.flush().unwrap();
                 buf.clear();
-                let _ = reader.read_to_string(&mut buf);
+                let _ = reader.read_line(&mut buf);
                 println!("Got response {:?}", buf);
                 buf.clear();
                 writer.flush().unwrap();
-                let mut buf = vec![];
-                let _ = reader.read_to_end(&mut buf);
+                let _ = reader.read_line(&mut buf);
+                let buff_trimmed = buf.trim()[1..].to_string();
+                let length = buff_trimmed.parse::<usize>().unwrap_or(0);
+                let mut binary_rdb_file = vec![0; length];
+                let _ = reader.read_exact(&mut binary_rdb_file);
 
-                println!("Got response {:?}", buf);
+                println!("Got response {:?}{:?}", buf, binary_rdb_file);
             }
         }
     }
-}
-
-fn get_empty_rdb() -> Vec<u8> {
-    let hex_empty_rdb = "524544495330303131fa0972656469732d76657205372e322e30fa0a72656469732d62697473c040fa056374696d65c26d08bc65fa08757365642d6d656dc2b0c41000fa08616f662d62617365c000fff06e3bfec0ff5aa2";
-    let empty_file_payload = hex::decode(hex_empty_rdb).map_err(|decoding_err| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, decoding_err.to_string())
-    });
-    empty_file_payload.unwrap()
 }
 
 fn main() {
@@ -247,6 +244,12 @@ fn main() {
     let (port, replication_info) = parse_args(args);
 
     let addr = String::from("127.0.0.1:") + &port.to_string();
+
+    let thread_shared_data: Arc<Mutex<SharedData>> = Arc::new(Mutex::new(SharedData {
+        replica_connections: Vec::new(),
+        replication_info: replication_info.clone(),
+        redis_cache: HashMap::new(),
+    }));
 
     if replication_info.role == "slave" {
         if replication_info.replica_info != "" {
@@ -265,33 +268,25 @@ fn main() {
             let sock_addr_resolved = sock_addr.unwrap();
             println!("{}", sock_addr_resolved);
 
-            let stream = TcpStream::connect_timeout(&sock_addr_resolved, Duration::from_secs(30));
+            let slave_stream = TcpStream::connect(&sock_addr_resolved);
 
-            match stream {
-                Ok(mut _stream) => {
-                    do_handshake(_stream, port.to_string().as_str());
+            match slave_stream {
+                Ok(ref _stream) => {
+                    do_handshake(&_stream, port.to_string().as_str());
                 }
                 Err(e) => {
                     panic!("can't connect to master, error: {:?}", e);
                 }
             }
+            let thread_shared_data_clone = Arc::clone(&thread_shared_data);
+
+            handle_connection_helper(slave_stream, &thread_shared_data_clone);
         }
     }
 
     let listener = TcpListener::bind(addr).unwrap();
-    let thread_shared_data: Arc<Mutex<SharedData>> = Arc::new(Mutex::new(SharedData {
-        replication_info,
-        redis_cache: HashMap::new(),
-    }));
-
-    //let ARedisCache = Arc::new(RedisCache);
-    // check_and_remove_expired_data(&redis_cache);
 
     for stream in listener.incoming() {
         handle_connection_helper(stream, &thread_shared_data);
-        println!(
-            "redis cache outside {:?}",
-            thread_shared_data.lock().unwrap().redis_cache
-        )
     }
 }
